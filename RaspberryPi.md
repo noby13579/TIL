@@ -93,3 +93,77 @@ Raspberry Pi 4 / BCM2711で、SWDデバッグできなかったので、配線�
 ## Fan電源
 https://miyabee-craft.com/blog/2024/09/15/post-9748/
 </br>USB-Aからとる
+
+
+## 開発ツールの準備
+```bash
+sudo apt install build-essential git flex bison libssl-dev device-tree-compiler
+sudo apt install gcc-aarch64-linux-gnu
+sudo apt install crossbuild-essential-arm64
+```
+
+## uboot
+https://docs.u-boot.org/en/latest/board/broadcom/raspberrypi.html
+1. ソースコードを取得する。
+   ```bash
+   git clone git://git.denx.de/u-boot.git
+   ```
+1. コンフィグレーションする。
+   ```bash
+   make rpi_4_defconfig
+   ```
+   ※`configs/rpi_4_defconfig`で`.config`ファイルを作る。
+1. u-boot.bin等をビルドする。
+   ```bash
+   export CROSS_COMPILE=aarch64-linux-gnu-
+   make -j$(nproc)
+   ```
+1. SDカードに書き込む。
+    - u-boot.binを書き込む
+    - config.txtを編集する。以下の行を追加（or 編集）する。
+      ```
+      kernel=u-boot.bin
+      ```
+1. SDカードをRaspberry Pi 4に挿入して電源ONし、ubootに入る。
+   - PicoProbeのDebug UARTのCOMポートをTeraTerm等で開いておく。115200kbps.
+   - Raspberry Pi 4の電源をONしたら、TeraTermでEnterキー等を連打し続ける。</br>
+   　→ ubootのコマンドが入力できるようになる。
+
+## Linux kernel
+https://www.raspberrypi.com/documentation/computers/linux_kernel.html#cross-compile-the-kernel
+1. ソースコードを取得する。
+   ```bash
+   git clone --depth=1 https://github.com/raspberrypi/linux
+   ```
+1. コンフィグレーションする。
+   ```bash
+   cd linux
+   KERNEL=kernel8
+   make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- bcm2711_defconfig
+   ```
+1. ビルドする。
+   ```bash
+   make -j$(nproc) ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- Image modules dtbs
+   ```
+
+
+## 起動シーケンスのメモ
+[Qiita Raspberry PiでSDカード暗号化とセキュアブートをテスト](https://qiita.com/kmitsu76/items/933443ea5def3d73deb2)  
+[Rpi4 secure boot - chain of trust](https://github.com/raspberrypi/usbboot/blob/master/docs/secure-boot-chain-of-trust-2711.pdf)
+
+https://www.raspberrypi.com/documentation/computers/raspberry-pi.html#raspberry-pi-boot-eeprom
+
+## Raspberry Pi documentation
+下記をWSL Ubuntu 24.04で実施した。
+1. githubから文書ソースを取得してVSCodeで開く。
+   ```bash
+   git clone --depth=1 https://github.com/raspberrypi/documentation
+   cd documentation
+   code .
+   ```
+1. `CONTRIBUTING.md`の`Build` -> `Linux`に従い、ツールをセットアップする。
+1. `CONTRIBUTING.md`の`Set up environment`に従い、Python venv環境をセットアップする。
+1. `CONTRIBUTING.md`の`Build HTML`で、HTML作成、および、Webサーバを起動する。
+
+Webブラウザで開いたところ、下記と同様のコンテンツな様子。。。  
+https://www.raspberrypi.com/documentation/
