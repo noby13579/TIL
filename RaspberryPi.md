@@ -167,3 +167,39 @@ https://www.raspberrypi.com/documentation/computers/raspberry-pi.html#raspberry-
 
 Webブラウザで開いたところ、下記と同様のコンテンツな様子。。。  
 https://www.raspberrypi.com/documentation/
+
+
+# Qemu/ARM64
+## buildroot
+1. buildrootをダウンロードし、適当なディレクトリに展開する。
+   ```bash
+   wget https://buildroot.org/downloads/buildroot-2025.02.tar.gz
+   tar xvzf buildroot-2025.02.tar.gz
+   ```
+1. Configurationする。
+   ```bash
+   make qemu_aarch64_virt_defconfig
+   make menuconfig
+   ```
+   System configuration
+    -> Enable root login with passwordが[*]であることを確認する。
+    -> Root passwordを入れておく
+
+1. Buildする。
+   ```bash
+   make BR2_JLEVEL=$(nproc)
+   ```
+   - WSLでWindows PATHを引き継いだため、下記エラーが発生した。Program Filesのスペース等が原因。
+     > Your PATH contains spaces, TABs, and/or newline (\n) characters.
+This doesn't work. Fix you PATH.
+
+     WSLにて`/etc/wsl.conf`を編集し、下記を追加する。WSLを再起動する。再度`make BR2_JLEVEL=$(nproc)`を実行する。
+     ```
+     [interop]
+     appendWindowsPath = false
+     ```
+1. 実行する。
+   ```bash
+   ./output/images/start-qemu.sh
+   ```
+   qemu (Embeded linux)の終了するには、`poweroff`コマンドを実行する。
