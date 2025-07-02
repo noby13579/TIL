@@ -181,9 +181,12 @@ https://www.raspberrypi.com/documentation/
    make qemu_aarch64_virt_defconfig
    make menuconfig
    ```
-   System configuration
-    -> Enable root login with passwordが[*]であることを確認する。
-    -> Root passwordを入れておく
+    - rootパスワードを設定する。
+      ```
+      System configuration
+      -> Enable root login with passwordが[*]であることを確認する。
+      -> Root passwordを入れておく
+      ```
 
 1. Buildする。
    ```bash
@@ -203,3 +206,175 @@ This doesn't work. Fix you PATH.
    ./output/images/start-qemu.sh
    ```
    qemu (Embeded linux)の終了するには、`poweroff`コマンドを実行する。
+
+## buildroot(EFI secure boot)
+buildroot 2025.05だと、ubootに鍵を認識させることがうまくいかなかった(EFI system partitionに鍵を配置したつもりだが自動認識されなかった)ので、buildroot 2021.02で実施した。
+
+
+1. buildroot 2021.02をダウンロードし、適当なディレクトリに展開する。
+   ```bash
+   wget https://buildroot.org/downloads/buildroot-2021.02.tar.gz
+   tar xvzf buildroot-2021.02.tar.gz
+   ```
+1. Configurationする。
+   ```bash
+   make aarch64_efi_defconfig
+   make menuconfig
+   ```
+    - rootパスワードを設定する。
+      ```
+      System configuration
+      -> Enable root login with passwordが[*]であることを確認する。
+      -> Root passwordを入れておく
+      ```
+
+    - Kernel imageを/bootに配置する。
+      ```
+      Kernel
+      -> Install kernel image to /boot in target
+      ``` 
+
+    - QEMUを追加する。
+      ```
+      Host utilities
+      -> host qemuを[*]にする。
+      -> Enable system emulationを[*]にする。
+      ```
+
+    - u-bootを追加する。
+      ```
+      Bootloaders
+      -> U-Bootを[*]にする。
+      -> Using an in-tree board defconfig fileにする。
+      -> Board defconfigを、qemu_arm64（名前は仮でOK。uboot_menuconfig後に再度変更する。）にする。
+      ```
+
+    - 注意：Kernel versionは変えない。</br>
+      この後のmake uboot-menujconfigでError（期待するKernel versionと一致しない）となるため。</br>
+      u-bootを追加しないまま、Kernel versionを変更し、一度makeしてからなら、いけるかもしれない（未確認）
+
+   - u-bootをConfigurationする。
+      ```bash
+      make uboot-menuconfig
+      ```
+      - Secure bootを有効にする。
+         ```
+         Boot options -> UEFI Support
+         -> Enable EFI secure boot supportを[*]にする。
+         ```
+   - Configurationを統合する。
+     ```
+     make uboot-savedefconfig
+     cp ./output/build/uboot-2025.04/defconfig ./board/aarch64-efi/uboot.config
+     make menuconfig
+     ```
+     ```
+     Bootloaders -> U-Boot
+     -> Using a custom board (def)config fileにする。
+     -> Configuration file pathを board/aarch64-efi/uboot.config にする。
+     ``` 
+
+1. Buildする。
+   ```bash
+   make BR2_JLEVEL=$(nproc)
+   ```
+
+1. 実行する。（non secure boot）
+   ```
+   #!/bin/sh
+
+   cd path_to_workspace/buildroot-2025.05/output/images
+
+   export PATH="path_to_workspace/buildroot-2025.05/output/host/bin:${PATH}"
+
+   exec qemu-system-aarch64 \
+    -M virt \
+    -cpu cortex-a57 \
+    -nographic \
+    -m 512 \
+    -smp 1 \
+    -bios u-boot.bin \
+    -drive file=disk.img,if=none,format=raw,id=hd0 \
+    -device virtio-blk-device,drive=hd0 \
+    -netdev user,id=eth0,hostfwd=tcp::10022-:22 \
+    -device virtio-net-device,netdev=eth0 \
+    -object rng-random,filename=/dev/urandom,id=rng0 \
+    -device virtio-rng-pci,rng=rng0
+   ```
+   上記を`start-uboot_efi.sh`として保存して実行する。
+   u-boot -> grub -> linuxが起動する。
+   u-bootのSecure boot機能は有効にしてあるが、鍵がないので(`Failed to load EFI variables`)、セキュアブート無効状態として起動する。
+
+1. Secure bootする。 </br>
+   1. 鍵を作る。
+      [u-bootのdoc/develop/uefi/uefi.rst](https://source.denx.de/u-boot/u-boot/-/blob/master/doc/develop/uefi/uefi.rst)の`Configuring UEFI secure boot`を参考に、下記３つを作る。
+      - Platform key
+      - Key exchange keys
+      - Whitelist database
+   1. u-bootに自動的に読み込ませるEFI System Partition用のファイルを作る。
+      ```bash
+      ./output/build/uboot-2025.04/tools/efivar.py set -i ubootefi.var -n db -d db.esl -t file
+      ./output/build/uboot-2025.04/tools/efivar.py set -i ubootefi.var -n PK -d PK.esl -t file
+      ./output/build/uboot-2025.04/tools/efivar.py set -i ubootefi.var -n KEK -d KEK.esl -t file
+      ```
+   1. EFI System Partitionをイメージに組み込む。
+      - ubootefi.varを、BOARD_DIRにコピーしておく。
+         ```bash
+         cp ubootefi.var ./board/aarch64-efi
+         ```
+      - `board/aarch64-efi/post_image.sh`に、下記を追加する。
+         ```bash
+         cp -f "${BOARD_DIR}/ubootefi.var" "${BINARIES_DIR}/efi-part/"
+         ```
+      - `board/aarch64-efi/genimage-efigenimage-efi.sh`に、下記を追加する。
+         ```
+         image efi-part.vfat {
+            vfat {
+               file ubootefi.var {
+                  image = "efi-part/ubootefi.var"
+               }
+            }
+         }
+         ```
+      - ディスクイメージを作り直す。
+         ```bash
+         make all
+         ```
+   1. QEMUを起動してみる。
+      ```bash
+      start-uboot_efi.sh
+      ```
+      u-bootがSecure boot機能有効、かつ、鍵があるので、grubの署名を検証するが失敗し、grubが起動しない。
+
+   1. Grubに署名を付与する。
+       - `board/aarch64-efi/post_image.sh`に、下記を追加する。
+         ```
+         sbsign --key db.key --cert db.crt --output "${BINARIES_DIR}/efi-part/EFI/BOOT//bootaa64.efi" "${BINARIES_DIR}/efi-part/EFI/BOOT//bootaa64.efi"
+         ```
+       - ディスクイメージを作り直す。
+          ```bash
+          make all
+          ```
+
+   1. QEMUを起動してみる。
+      ```bash
+      start-uboot_efi.sh
+      ```
+      u-bootがSecure boot機能有効、かつ、鍵があるので、grubの署名を検証して成功しgrubは起動するが、linuxの署名検証に失敗する。
+
+   1. Linuxに署名を付与する。
+       - `board/aarch64-efi/post_image.sh`に、下記を追加する。
+         ```
+         sbsign --key db.key --cert db.crt --output "${BINARIES_DIR}/Image" "${BINARIES_DIR}/Image"
+         ```
+       - ディスクイメージを作り直す。
+          ```bash
+          make all
+          ```
+      
+   1. QEMUを起動する。
+      ```bash
+      start-uboot_efi.sh
+      ```
+      u-bootがSecure boot機能有効、かつ、鍵があるので、grubおよびlinuxの署名を検証して成功し、Linuxも起動する。
+
