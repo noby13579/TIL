@@ -102,7 +102,176 @@ sudo apt install gcc-aarch64-linux-gnu
 sudo apt install crossbuild-essential-arm64
 ```
 
-## uboot
+## buildrootで作ったrootfsと、buildroot外でビルドしたLinuxカーネル（, dtb, kernel module)を統合して、SDイメージを作る
+### Linux kernel
+https://www.raspberrypi.com/documentation/computers/linux_kernel.html#cross-compile-the-kernel
+1. ソースコードを取得する。
+   ```bash
+   git clone --depth=1 https://github.com/raspberrypi/linux
+   ```
+1. コンフィグレーションする。
+   ```bash
+   cd linux
+   make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- bcm2711_rt_defconfig
+   ```
+   - Fuilly preemptiveにするために、bcm2711_defconfigの代わりにbcm2711_rt_defconfigにした。
+
+   必要に応じてmenuconfigする。
+   ```bash
+   make menuconfig
+   ```
+
+1. ビルドする。
+   ```bash
+   make -j$(nproc) ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- Image modules dtbs
+   ```
+
+### buildroot
+1. buildrootをダウンロードし、適当なディレクトリに展開する。
+   ```bash
+   wget https://buildroot.org/downloads/buildroot-2025.05.tar.gz
+   tar xvzf buildroot-2025.05.tar.gz
+   ```
+
+1. buildroot外でビルド済のKernel moduleを、buildroot rootfsに統合するために、post-build.shを作成する。
+   ```bash
+   #!/bin/sh
+   set -e
+   BR_TARGET_DIR=$1
+   LINUX_DIR="/path_to_workspace/linux"
+
+   echo "Post-build: Installing kernel modules to ${BR_TARGET_DIR}"
+   make -C "${LINUX_DIR}" INSTALL_MOD_PATH="${BR_TARGET_DIR}" modules_install
+   echo "Post-build: Kernel modules installed successfully."
+   ```
+   buildroot-2025.05/board/my_rpi4-64/post-build.sh に置いておく。
+
+1. buildroot外でビルド済のLinux kernel imageとdtbを、buildroot rootfsに統合するために、post-image.shを作成する。
+   ```bash
+   #!/bin/bash
+   set -e
+
+   BR_IMAGES_DIR=$1
+   LINUX_DIR="/path_to_workspace/linux"
+   RPI_FIRMWARE_DIR="${BR_IMAGES_DIR}/rpi-firmware"
+   echo "Post-image: Copying kernel, DTBs, and overlays to ${RPI_FIRMWARE_DIR}"
+   cp "${LINUX_DIR}/arch/arm64/boot/Image" "${BINARIES_DIR}/"
+   cp "${LINUX_DIR}/arch/arm64/boot/dts/broadcom/bcm2711-rpi-4-b.dtb" "${BR_IMAGES_DIR}/"
+   mkdir -p "${RPI_FIRMWARE_DIR}/overlays"
+   cp "${LINUX_DIR}/arch/arm/boot/dts/overlays/"*.dtbo "${RPI_FIRMWARE_DIR}/overlays/"
+
+   echo "Post-image: Files copied successfully."
+
+   # 以下は、board/raspberrypi4-64/post-image.shから流用した。todo:詳細を理解。
+   BOARD_DIR="board/raspberrypi4-64"
+   BOARD_NAME="$(basename ${BOARD_DIR})"
+   GENIMAGE_CFG="${BOARD_DIR}/genimage-${BOARD_NAME}.cfg"
+   GENIMAGE_TMP="${BUILD_DIR}/genimage.tmp"
+   echo "BINARIES_DIR: ${BINARIES_DIR}"
+
+   if [ ! -e "${GENIMAGE_CFG}" ]; then
+      GENIMAGE_CFG="${BINARIES_DIR}/genimage.cfg"
+      FILES=()
+
+      for i in "${BINARIES_DIR}"/*.dtb "${BINARIES_DIR}"/rpi-firmware/*; do
+         FILES+=( "${i#${BINARIES_DIR}/}" )
+      done
+
+      KERNEL=$(sed -n 's/^kernel=//p' "${BINARIES_DIR}/rpi-firmware/config.txt")
+      FILES+=( "${KERNEL}" )
+
+      BOOT_FILES=$(printf '\\t\\t\\t"%s",\\n' "${FILES[@]}")
+      sed "s|#BOOT_FILES#|${BOOT_FILES}|" "${BOARD_DIR}/genimage.cfg.in" \
+         > "${GENIMAGE_CFG}"
+   fi
+
+   trap 'rm -rf "${ROOTPATH_TMP}"' EXIT
+   ROOTPATH_TMP="$(mktemp -d)"
+
+   rm -rf "${GENIMAGE_TMP}"
+
+   genimage \
+      --rootpath "${ROOTPATH_TMP}"   \
+      --tmppath "${GENIMAGE_TMP}"    \
+      --inputpath "${BINARIES_DIR}"  \
+      --outputpath "${BINARIES_DIR}" \
+      --config "${GENIMAGE_CFG}"
+
+   exit $?
+   ```
+   buildroot-2025.05/board/my_rpi4-64/post-image.sh に置いておく。
+
+1. post-build.sh, post-image.shに、実行権限を付与する。
+   ```bash
+   chmod +x buildroot-2025.05/board/my_rpi4-64/post-*.sh
+   ```
+
+1. raspberrypi4_64_defconfigを参考に、defconfigを作る。
+   - 事前に作成しておいたpost-build.sh, post-image.shに指定を変更する。
+   - buildroot外でビルドしたLinux kernelを使うため、BR2_LINUX_KERNELと関連設定は削除する。
+   ```bash
+   BR2_aarch64=y
+   BR2_cortex_a72=y
+   BR2_ARM_FPU_VFPV4=y
+   BR2_TOOLCHAIN_EXTERNAL=y
+   BR2_TOOLCHAIN_EXTERNAL_BOOTLIN=y
+   BR2_TOOLCHAIN_EXTERNAL_BOOTLIN_AARCH64_GLIBC_STABLE=y
+   BR2_GLOBAL_PATCH_DIR="board/raspberrypi/patches"
+   BR2_DOWNLOAD_FORCE_CHECK_HASHES=y
+   BR2_SYSTEM_DHCP="eth0"
+   BR2_ROOTFS_POST_BUILD_SCRIPT="board/my_rpi4-64/post-build.sh"
+   BR2_ROOTFS_POST_IMAGE_SCRIPT="board/my_rpi4-64/post-image.sh"
+   #BR2_LINUX_KERNEL is not set
+   BR2_PACKAGE_BUSYBOX_SHOW_OTHERS=y
+   BR2_PACKAGE_XZ=y
+   BR2_PACKAGE_RPI_FIRMWARE=y
+   BR2_PACKAGE_RPI_FIRMWARE_VARIANT_PI4=y
+   BR2_PACKAGE_RPI_FIRMWARE_CONFIG_FILE="board/raspberrypi4-64/config_4_64bit.txt"
+   BR2_PACKAGE_KMOD=y
+   BR2_PACKAGE_KMOD_TOOLS=y
+   BR2_TARGET_ROOTFS_EXT2=y
+   BR2_TARGET_ROOTFS_EXT2_4=y
+   BR2_TARGET_ROOTFS_EXT2_SIZE="120M"
+   # BR2_TARGET_ROOTFS_TAR is not set
+   BR2_PACKAGE_HOST_DOSFSTOOLS=y
+   BR2_PACKAGE_HOST_GENIMAGE=y
+   BR2_PACKAGE_HOST_KMOD_XZ=y
+   BR2_PACKAGE_HOST_MTOOLS=y
+
+   ```
+   buildroot-2025.05/configs/my_raspberrypi4_64_defconfig として保存する。
+
+1. コンフィグレーションする。
+   ```bash
+   make my_raspberrypi4_64_defconfig
+   ```
+   必要に応じてmenuconfigする。
+   ```bash
+   make menuconfig
+   ```
+   以下、有効にしたもののメモ
+   - `BR2_PACKAGE_TRACE_CMD`: Target packages -> Debugging, profiling and benchmark -> trace-cmd
+   - `BR2_PACKAGE_HTOP`: Target packages -> System tools -> htop
+   - `BR2_PACKAGE_LIBGPIOD, BR2_PACKAGE_LIBGPIOD_TOOLS`: Target packages -> Libraries -> Hardware handling -> lilbgpiod, install tools
+
+1. ビルドする。
+   ```bash
+   make BR2_JLEVEL=$(nproc)
+   ```
+
+### SDカードに書き込む
+1. Raspberry Pi Imagerを起動する
+1. デバイス：Raspberry Pi 4を選択する
+1. OS：Use customを選択し、`buildroot-2025.05/output/images/sdcard.img`を指定する。
+1. ストレージ: PCに挿入したSDカードを選択する。
+1. 「次へ」で書き込む。カスタマイズセッティングは「いいえ」を選択する。
+
+SDカードをRaspberry Pi 4に入れて電源ONすると、起動する。
+Rpi Pico Debug probeのUARTのシリアルコンソールで操作できる。
+
+
+
+### uboot(現時点で保留)
 https://docs.u-boot.org/en/latest/board/broadcom/raspberrypi.html
 1. ソースコードを取得する。
    ```bash
@@ -129,25 +298,7 @@ https://docs.u-boot.org/en/latest/board/broadcom/raspberrypi.html
    - Raspberry Pi 4の電源をONしたら、TeraTermでEnterキー等を連打し続ける。</br>
    　→ ubootのコマンドが入力できるようになる。
 
-## Linux kernel
-https://www.raspberrypi.com/documentation/computers/linux_kernel.html#cross-compile-the-kernel
-1. ソースコードを取得する。
-   ```bash
-   git clone --depth=1 https://github.com/raspberrypi/linux
-   ```
-1. コンフィグレーションする。
-   ```bash
-   cd linux
-   KERNEL=kernel8
-   make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- bcm2711_defconfig
-   ```
-1. ビルドする。
-   ```bash
-   make -j$(nproc) ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- Image modules dtbs
-   ```
-
-
-## 起動シーケンスのメモ
+## 起動シーケンスのWeb情報
 [Qiita Raspberry PiでSDカード暗号化とセキュアブートをテスト](https://qiita.com/kmitsu76/items/933443ea5def3d73deb2)  
 [Rpi4 secure boot - chain of trust](https://github.com/raspberrypi/usbboot/blob/master/docs/secure-boot-chain-of-trust-2711.pdf)
 
