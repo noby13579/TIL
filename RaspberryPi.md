@@ -120,6 +120,7 @@ https://www.raspberrypi.com/documentation/computers/linux_kernel.html#cross-comp
    ```bash
    make menuconfig
    ```
+   System configuration -> Root passwordを入れておく。
 
 1. ビルドする。
    ```bash
@@ -206,6 +207,11 @@ https://www.raspberrypi.com/documentation/computers/linux_kernel.html#cross-comp
    chmod +x buildroot-2025.05/board/my_rpi4-64/post-*.sh
    ```
 
+1. ターゲットrootfs overlayファイルを作る
+   `board/my_rpi4-64/rootfs_overlay`以下に、ターゲットrootfsと同じ階層でファイルを置く。
+   - etc/ssh/sshd_config  
+     opensshサーバにログインできるような設定内容にしておく。
+
 1. raspberrypi4_64_defconfigを参考に、defconfigを作る。
    - 事前に作成しておいたpost-build.sh, post-image.shに指定を変更する。
    - buildroot外でビルドしたLinux kernelを使うため、BR2_LINUX_KERNELと関連設定は削除する。
@@ -221,6 +227,7 @@ https://www.raspberrypi.com/documentation/computers/linux_kernel.html#cross-comp
    BR2_SYSTEM_DHCP="eth0"
    BR2_ROOTFS_POST_BUILD_SCRIPT="board/my_rpi4-64/post-build.sh"
    BR2_ROOTFS_POST_IMAGE_SCRIPT="board/my_rpi4-64/post-image.sh"
+   BR2_ROOTFS_OVERLAY="board/my_rpi4-64/rootfs_overlay"
    #BR2_LINUX_KERNEL is not set
    BR2_PACKAGE_BUSYBOX_SHOW_OTHERS=y
    BR2_PACKAGE_XZ=y
@@ -252,7 +259,9 @@ https://www.raspberrypi.com/documentation/computers/linux_kernel.html#cross-comp
    以下、有効にしたもののメモ
    - `BR2_PACKAGE_TRACE_CMD`: Target packages -> Debugging, profiling and benchmark -> trace-cmd
    - `BR2_PACKAGE_HTOP`: Target packages -> System tools -> htop
-   - `BR2_PACKAGE_LIBGPIOD, BR2_PACKAGE_LIBGPIOD_TOOLS`: Target packages -> Libraries -> Hardware handling -> lilbgpiod, install tools
+   - `BR2_PACKAGE_LIBGPIOD`, `BR2_PACKAGE_LIBGPIOD_TOOLS`: Target packages -> Libraries -> Hardware handling -> lilbgpiod, install tools
+   - `BR2_PACKAGE_DTC`, `BR2_PACKAGE_DTC_PROGRAMS`: Target packages -> Libraries -> Hardware handling -> dtc (libfdt), dtc programs
+   - `BR2_PACKAGE_OPENSSH`: Target packages -> Network application -> openssh
 
 1. ビルドする。
    ```bash
