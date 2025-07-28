@@ -120,7 +120,6 @@ https://www.raspberrypi.com/documentation/computers/linux_kernel.html#cross-comp
    ```bash
    make menuconfig
    ```
-   System configuration -> Root passwordを入れておく。
 
 1. ビルドする。
    ```bash
@@ -262,6 +261,9 @@ https://www.raspberrypi.com/documentation/computers/linux_kernel.html#cross-comp
    - `BR2_PACKAGE_LIBGPIOD`, `BR2_PACKAGE_LIBGPIOD_TOOLS`: Target packages -> Libraries -> Hardware handling -> lilbgpiod, install tools
    - `BR2_PACKAGE_DTC`, `BR2_PACKAGE_DTC_PROGRAMS`: Target packages -> Libraries -> Hardware handling -> dtc (libfdt), dtc programs
    - `BR2_PACKAGE_OPENSSH`: Target packages -> Network application -> openssh
+   - `BR2_PACKAGE_HOST_ENVIRONMENT_SETUP`: Host utilities -> host environment-setup  
+   ターゲット用のアプリケーションをビルドするときの準備のため。
+   - System configuration -> Root passwordを入れておく。
 
 1. ビルドする。
    ```bash
